@@ -30,7 +30,7 @@ function inAOI(a, b) {
 function snapshotFor(p) {
   const arr = [];
   for (const other of players.values()) {
-    if (inAOI(p, other)) arr.push({ id: other.id, x: other.x, y: other.y });
+    if (inAOI(p, other)) arr.push({ id: other.id, x: other.x, y: other.y, name: other.name });
   }
   return arr;
 }
@@ -47,7 +47,7 @@ wss.on("connection", (ws) => {
   const p = {
     id,
     ws,
-    name: "anon",
+    name: "Traveler",
     x: sx, y: sy,
     fx: sx, fy: sy,
     path: [],
@@ -68,15 +68,15 @@ wss.on("connection", (ws) => {
     try { msg = JSON.parse(buf.toString()); } catch { return; }
 
     if (msg.t === "HELLO") {
-      p.name = String(msg.name || "anon").slice(0, 20);
+      p.name = String(msg.name || "Traveler").slice(0, 20);
       p.dirty = true;
       return;
     }
-		
-		if (msg.t === "PING") {
-			send(ws, { t: "PONG", ts: Date.now() });
-			return;
-		}
+
+    if (msg.t === "PING") {
+      send(ws, { t: "PONG", ts: Date.now() });
+      return;
+    }
 
     if (msg.t === "MOVE_TO") {
       const now = Date.now();
@@ -100,7 +100,6 @@ wss.on("connection", (ws) => {
   ws.on("close", () => {
     players.delete(id);
     removed.add(id);
-    // Mark nearby players dirty so they broadcast a delta that includes removal
     for (const other of players.values()) other.dirty = true;
   });
 });
@@ -147,12 +146,12 @@ setInterval(() => {
     }
   }
 
-  // broadcast deltas per player AOI
+  // broadcast deltas per player AOI — now includes name
   for (const p of players.values()) {
     const up = [];
     for (const other of players.values()) {
       if (!inAOI(p, other)) continue;
-      if (other.dirty) up.push({ id: other.id, x: other.x, y: other.y });
+      if (other.dirty) up.push({ id: other.id, x: other.x, y: other.y, name: other.name });
     }
 
     const rm = [];
