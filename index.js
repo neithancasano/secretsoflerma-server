@@ -11,11 +11,11 @@ const NPC_TILES_PER_SEC = 1.5;
 const NPC_TILES_PER_TICK = NPC_TILES_PER_SEC / TICK_HZ;
 
 const AOI_RADIUS = 18;
-const ATTACK_RANGE = 3;       // tiles
-const ATTACK_COOLDOWN = 1000; // ms between attacks
+const ATTACK_RANGE = 6;       // bumped from 3 — feels more natural
+const ATTACK_COOLDOWN = 1000;
 const PORING_MAX_HP = 50;
-const PORING_BASE_DMG = 8;    // damage per hit
-const PORING_RESPAWN_MS = 10000; // 10 seconds
+const PORING_BASE_DMG = 8;
+const PORING_RESPAWN_MS = 10000;
 
 const map = loadMap();
 let tick = 0;
@@ -50,7 +50,6 @@ function npcSnapshotFor(p) {
   return arr;
 }
 
-// Broadcast an event to all players in AOI of a position
 function broadcastNear(pos, obj) {
   for (const p of players.values())
     if (inAOI(p, pos)) send(p.ws, obj);
@@ -82,7 +81,7 @@ for (const spawn of PORING_SPAWNS) {
 }
 console.log(`[LERMA] Spawned ${npcs.size} Porings 🛒`);
 
-// ── Respawn check (runs every second) ──
+// ── Respawn check ──
 setInterval(() => {
   const now = Date.now();
   for (const npc of npcs.values()) {
@@ -95,7 +94,6 @@ setInterval(() => {
       npc.path = [];
       npc.dirty = true;
       npc.nextWanderAt = Date.now() + 1000;
-      // Announce respawn to nearby players
       broadcastNear(npc, { t: "NPC_SPAWN", id: npc.id, x: npc.x, y: npc.y, name: npc.name, kind: npc.kind, hp: npc.hp, maxHp: npc.maxHp });
       console.log(`[LERMA] Poring ${npc.id} respawned at (${npc.x}, ${npc.y})`);
     }
@@ -151,7 +149,7 @@ wss.on("connection", (ws) => {
     path: [], dirty: true,
     lastMoveAt: 0,
     lastAttackAt: 0,
-    attackTarget: null, // npc id currently attacking
+    attackTarget: null,
     welcomed: false
   };
 
@@ -187,7 +185,7 @@ wss.on("connection", (ws) => {
       const now = Date.now();
       if (now - p.lastMoveAt < 60) return;
       p.lastMoveAt = now;
-      p.attackTarget = null; // cancel attack when moving
+      p.attackTarget = null;
       const tx = Math.floor(msg.x), ty = Math.floor(msg.y);
       if (tx < 0 || ty < 0 || tx >= map.w || ty >= map.h) return;
       if (isBlocked(map, tx, ty)) return;
@@ -197,16 +195,14 @@ wss.on("connection", (ws) => {
       return;
     }
 
-    // ── Attack NPC ──
     if (msg.t === "ATTACK_NPC") {
       const npc = npcs.get(msg.npcId);
       if (!npc || npc.isDead) return;
       p.attackTarget = msg.npcId;
-      p.path = []; // stop moving
+      p.path = [];
       return;
     }
 
-    // ── Cancel attack ──
     if (msg.t === "CANCEL_ATTACK") {
       p.attackTarget = null;
       return;
@@ -220,7 +216,7 @@ wss.on("connection", (ws) => {
   });
 });
 
-// ── Auto attack tick (separate from movement tick) ──
+// ── Auto attack tick ──
 setInterval(() => {
   const now = Date.now();
   for (const p of players.values()) {
@@ -228,16 +224,13 @@ setInterval(() => {
     const npc = npcs.get(p.attackTarget);
     if (!npc || npc.isDead) { p.attackTarget = null; continue; }
     if (now - p.lastAttackAt < ATTACK_COOLDOWN) continue;
-    if (dist(p, npc) > ATTACK_RANGE) continue; // too far
+    if (dist(p, npc) > ATTACK_RANGE) continue;
 
     p.lastAttackAt = now;
-
-    // Calculate damage with slight random variance
     const dmg = PORING_BASE_DMG + Math.floor(Math.random() * 5);
     npc.hp = Math.max(0, npc.hp - dmg);
     npc.dirty = true;
 
-    // Broadcast hit to all nearby players
     broadcastNear(npc, { t: "NPC_HIT", npcId: npc.id, dmg, hp: npc.hp, maxHp: npc.maxHp, attackerId: p.id });
 
     if (npc.hp <= 0) {
@@ -249,7 +242,7 @@ setInterval(() => {
       console.log(`[LERMA] Poring ${npc.id} slain by ${p.name}!`);
     }
   }
-}, 100); // check attacks every 100ms
+}, 100);
 
 setInterval(() => {
   tick++;
