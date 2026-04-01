@@ -5,20 +5,21 @@ import { findPathAStar } from "./pathfinding.js";
 const TICK_HZ = 20;
 const TICK_MS = Math.floor(1000 / TICK_HZ);
 
-const TILES_PER_SEC   = 5;
-const TILES_PER_TICK  = TILES_PER_SEC / TICK_HZ;
-const NPC_TILES_PER_SEC  = 2.5; // chase speed — faster than wander
+const TILES_PER_SEC      = 5;
+const TILES_PER_TICK     = TILES_PER_SEC / TICK_HZ;
+const NPC_TILES_PER_SEC  = 2.5;
 const NPC_TILES_PER_TICK = NPC_TILES_PER_SEC / TICK_HZ;
 
-const AOI_RADIUS      = 18;
-const ATTACK_RANGE    = 2;    // must be adjacent to attack
-const ATTACK_COOLDOWN = 1000; // ms between player attacks
-const PORING_ATK_COOLDOWN = 2000; // Poring attacks slower
-const PORING_ATK_DMG  = 5;   // Poring does 5 damage per hit (placeholder)
-const PORING_MAX_HP   = 50;
-const PORING_BASE_DMG = 8;
-const PORING_RESPAWN_MS = 10000;
-const LEASH_RANGE     = 12;  // tiles — if player runs this far, Poring gives up
+const AOI_RADIUS          = 18;
+const ATTACK_RANGE        = 2;    // tiles — must be close to swing
+const CHASE_RANGE         = 2;    // player walks toward target if farther than this
+const ATTACK_COOLDOWN     = 1000;
+const PORING_ATK_COOLDOWN = 2000;
+const PORING_ATK_DMG      = 5;
+const PORING_MAX_HP       = 50;
+const PORING_BASE_DMG     = 8;
+const PORING_RESPAWN_MS   = 10000;
+const LEASH_RANGE         = 12;
 
 const map = loadMap();
 let tick = 0;
@@ -72,11 +73,8 @@ function spawnPoring(spawnPos) {
     spawnX: spawnPos.x, spawnY: spawnPos.y,
     hp: PORING_MAX_HP, maxHp: PORING_MAX_HP,
     isDead: false, respawnAt: null,
-    // Aggro state
-    aggroTarget: null,   // player id
-    lastNpcAtkAt: 0,
-    lastChaseAt: 0,
-    // Wander state
+    aggroTarget: null,
+    lastNpcAtkAt: 0, lastChaseAt: 0,
     path: [], dirty: true,
     nextWanderAt: Date.now() + Math.random() * 3000,
   });
@@ -112,16 +110,13 @@ function tickNPCs() {
   for (const npc of npcs.values()) {
     if (npc.isDead) continue;
 
-    // ── AGGRO MODE ──
     if (npc.aggroTarget) {
       const target = players.get(npc.aggroTarget);
 
-      // Target disconnected or ran too far → leash back to spawn
       if (!target || dist(npc, { x: npc.spawnX, y: npc.spawnY }) > LEASH_RANGE) {
         npc.aggroTarget = null;
         npc.path = [];
         npc.nextWanderAt = now + 1000;
-        // Walk back to spawn
         const back = findPathAStar(map, npc.x, npc.y, npc.spawnX, npc.spawnY, 300);
         if (back && back.length > 1) npc.path = back.filter(s => !(s.x===npc.x && s.y===npc.y));
         broadcastNear(npc, { t: "NPC_LEASH", npcId: npc.id });
@@ -129,26 +124,21 @@ function tickNPCs() {
       }
 
       const d = dist(npc, target);
-
-      // In attack range — Poring bites back!
       if (d <= ATTACK_RANGE) {
-        npc.path = []; // stop and fight
+        npc.path = [];
         if (now - npc.lastNpcAtkAt >= PORING_ATK_COOLDOWN) {
           npc.lastNpcAtkAt = now;
           const dmg = PORING_ATK_DMG + Math.floor(Math.random() * 3);
           send(target.ws, { t: "PLAYER_HIT", dmg, attackerId: npc.id });
         }
       } else {
-        // Chase! Recalculate path toward target every 500ms
         if (now - npc.lastChaseAt > 500 || npc.path.length === 0) {
           npc.lastChaseAt = now;
           const path = findPathAStar(map, npc.x, npc.y, target.x, target.y, 300);
           if (path && path.length > 1) npc.path = path.filter(s => !(s.x===npc.x && s.y===npc.y));
         }
       }
-
     } else {
-      // ── WANDER MODE ──
       if (npc.path.length === 0 && now >= npc.nextWanderAt) {
         const wanderRange = 5;
         const tx = Math.max(0, Math.min(map.w-1, npc.x + Math.floor((Math.random()-0.5)*wanderRange*2)));
@@ -161,7 +151,6 @@ function tickNPCs() {
       }
     }
 
-    // ── Move along current path ──
     if (npc.path.length === 0) continue;
     const next = npc.path[0];
     if (npc.x === next.x && npc.y === next.y) { npc.path.shift(); continue; }
@@ -194,9 +183,8 @@ wss.on("connection", (ws) => {
     id, ws, name: "Traveler",
     x: sx, y: sy, fx: sx, fy: sy,
     path: [], dirty: true,
-    lastMoveAt: 0,
-    lastAttackAt: 0,
-    attackTarget: null,
+    lastMoveAt: 0, lastAttackAt: 0,
+    attackTarget: null, lastChaseNpcAt: 0,
     welcomed: false
   };
 
@@ -229,7 +217,7 @@ wss.on("connection", (ws) => {
       const now = Date.now();
       if (now - p.lastMoveAt < 60) return;
       p.lastMoveAt = now;
-      p.attackTarget = null;
+      p.attackTarget = null; // clicking map cancels attack
       const tx = Math.floor(msg.x), ty = Math.floor(msg.y);
       if (tx < 0 || ty < 0 || tx >= map.w || ty >= map.h) return;
       if (isBlocked(map, tx, ty)) return;
@@ -244,10 +232,9 @@ wss.on("connection", (ws) => {
       if (!npc || npc.isDead) return;
       p.attackTarget = msg.npcId;
       p.path = [];
-      // Aggro the Poring!
       if (!npc.aggroTarget) {
         npc.aggroTarget = p.id;
-        npc.path = []; // stop wandering immediately
+        npc.path = [];
         broadcastNear(npc, { t: "NPC_AGGRO", npcId: npc.id });
         console.log(`[LERMA] Poring ${npc.id} aggroed by ${p.name}`);
       }
@@ -261,12 +248,8 @@ wss.on("connection", (ws) => {
   });
 
   ws.on("close", () => {
-    // Drop aggro if this player was being chased
     for (const npc of npcs.values()) {
-      if (npc.aggroTarget === id) {
-        npc.aggroTarget = null;
-        npc.path = [];
-      }
+      if (npc.aggroTarget === id) { npc.aggroTarget = null; npc.path = []; }
     }
     players.delete(id);
     removed.add(id);
@@ -274,17 +257,37 @@ wss.on("connection", (ws) => {
   });
 });
 
-// ── Auto attack tick ──
+// ── Auto attack tick — player chases NPC if out of range ──
 setInterval(() => {
   const now = Date.now();
   for (const p of players.values()) {
     if (!p.attackTarget) continue;
     const npc = npcs.get(p.attackTarget);
     if (!npc || npc.isDead) { p.attackTarget = null; continue; }
-    if (now - p.lastAttackAt < ATTACK_COOLDOWN) continue;
-    if (dist(p, npc) > ATTACK_RANGE) continue; // must be close
 
+    const d = dist(p, npc);
+
+    if (d > ATTACK_RANGE) {
+      // Out of range — walk toward the Poring every 400ms
+      if (now - p.lastChaseNpcAt > 400 || p.path.length === 0) {
+        p.lastChaseNpcAt = now;
+        const path = findPathAStar(map, p.x, p.y, npc.x, npc.y, 300);
+        if (path && path.length > 1) {
+          // Walk to 1 tile away, not on top of it
+          const goal = path.length > 2 ? path[path.length - 2] : path[path.length - 1];
+          const chosePath = findPathAStar(map, p.x, p.y, goal.x, goal.y, 300);
+          if (chosePath && chosePath.length > 1)
+            p.path = chosePath.filter(s => !(s.x === p.x && s.y === p.y));
+        }
+      }
+      continue; // don't attack yet, still moving
+    }
+
+    // In range — attack!
+    if (now - p.lastAttackAt < ATTACK_COOLDOWN) continue;
+    p.path = []; // stop moving while attacking
     p.lastAttackAt = now;
+
     const dmg = PORING_BASE_DMG + Math.floor(Math.random() * 5);
     npc.hp = Math.max(0, npc.hp - dmg);
     npc.dirty = true;
