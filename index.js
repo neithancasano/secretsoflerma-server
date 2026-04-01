@@ -41,6 +41,7 @@ console.log("Secrets of Lerma Zone Server listening on ws://127.0.0.1:3000");
 wss.on("connection", (ws) => {
   const id = uid();
 
+  // Default spawn — will be overridden by savedX/savedY from HELLO if present
   let sx = 10, sy = 10;
   while (isBlocked(map, sx, sy)) sx++;
 
@@ -53,14 +54,13 @@ wss.on("connection", (ws) => {
     path: [],
     dirty: true,
     lastMoveAt: 0,
-    welcomed: false  // wait for HELLO before sending SNAPSHOT
+    welcomed: false
   };
 
   players.set(id, p);
 
   // Send WELCOME immediately so client knows its id and map size
   send(ws, { t: "WELCOME", id, tick: TICK_HZ, map: { w: map.w, h: map.h } });
-  // SNAPSHOT is sent after HELLO arrives with the real name
 
   ws.on("message", (buf) => {
     let msg;
@@ -68,13 +68,27 @@ wss.on("connection", (ws) => {
 
     if (msg.t === "HELLO") {
       p.name = String(msg.name || "Traveler").slice(0, 20);
+
+      // Restore saved position if valid
+      const sx = typeof msg.savedX === "number" ? Math.floor(msg.savedX) : null;
+      const sy = typeof msg.savedY === "number" ? Math.floor(msg.savedY) : null;
+
+      if (sx !== null && sy !== null &&
+          sx >= 0 && sy >= 0 &&
+          sx < map.w && sy < map.h &&
+          !isBlocked(map, sx, sy)) {
+        p.x = sx; p.fx = sx;
+        p.y = sy; p.fy = sy;
+        console.log(`[LERMA] ${p.name} restored to (${sx}, ${sy})`);
+      } else {
+        console.log(`[LERMA] ${p.name} spawned at default (${p.x}, ${p.y})`);
+      }
+
       p.dirty = true;
 
-      // Now send the SNAPSHOT with the real name already set
       if (!p.welcomed) {
         p.welcomed = true;
         send(ws, { t: "SNAPSHOT", you: id, players: snapshotFor(p) });
-        // Mark everyone near as dirty so newcomers appear quickly
         for (const other of players.values()) if (inAOI(p, other)) other.dirty = true;
       }
       return;
@@ -87,7 +101,7 @@ wss.on("connection", (ws) => {
 
     if (msg.t === "MOVE_TO") {
       const now = Date.now();
-      if (now - p.lastMoveAt < 60) return; // light spam guard
+      if (now - p.lastMoveAt < 60) return;
       p.lastMoveAt = now;
 
       const tx = Math.floor(msg.x);
@@ -114,7 +128,6 @@ wss.on("connection", (ws) => {
 setInterval(() => {
   tick++;
 
-  // simulate movement
   for (const p of players.values()) {
     if (p.path.length === 0) continue;
 
@@ -153,7 +166,6 @@ setInterval(() => {
     }
   }
 
-  // broadcast deltas per player AOI
   for (const p of players.values()) {
     const up = [];
     for (const other of players.values()) {
@@ -169,7 +181,6 @@ setInterval(() => {
     }
   }
 
-  // clear dirty + removals
   for (const p of players.values()) p.dirty = false;
   removed = new Set();
 
