@@ -11,7 +11,7 @@ const NPC_TILES_PER_SEC  = 2.5;
 const NPC_TILES_PER_TICK = NPC_TILES_PER_SEC / TICK_HZ;
 
 const AOI_RADIUS          = 18;
-const ATTACK_RANGE        = 2;
+const ATTACK_RANGE        = 1.5; // strict melee — must be adjacent. Ranged = future class privilege 🏹
 const ATTACK_COOLDOWN     = 1000;
 const PORING_ATK_COOLDOWN = 2000;
 const PORING_ATK_DMG      = 5;
@@ -233,7 +233,7 @@ wss.on("connection", (ws) => {
       if (!npc || npc.isDead) return;
       p.attackTarget = msg.npcId;
       p.path = [];
-      p.lastChaseNpcAt = 0; // reset so chase starts immediately
+      p.lastChaseNpcAt = 0;
       if (!npc.aggroTarget) {
         npc.aggroTarget = p.id;
         npc.path = [];
@@ -269,11 +269,9 @@ setInterval(() => {
 
     const d = dist(p, npc);
 
-    // Out of range — walk straight to the Poring's tile
     if (d > ATTACK_RANGE) {
       if (now - p.lastChaseNpcAt > 400) {
         p.lastChaseNpcAt = now;
-        // Pathfind directly to npc tile — A* will get us adjacent
         const path = findPathAStar(map, p.x, p.y, npc.x, npc.y, 300);
         if (path && path.length > 1) {
           p.path = path.filter(s => !(s.x === p.x && s.y === p.y));
@@ -283,8 +281,7 @@ setInterval(() => {
       continue;
     }
 
-    // In range — ATTACK!
-    p.path = []; // plant feet and swing
+    p.path = [];
     if (now - p.lastAttackAt < ATTACK_COOLDOWN) continue;
     p.lastAttackAt = now;
 
@@ -308,8 +305,7 @@ setInterval(() => {
 }, 100);
 
 setInterval(() => {
-  tick++;
-
+  tick++;\n
   for (const p of players.values()) {
     if (p.path.length === 0) continue;
     const next = p.path[0];
