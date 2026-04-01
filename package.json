@@ -1,0 +1,6 @@
+{
+  "name": "secretsoflerma-zone",
+  "type": "module",
+  "dependencies": { "ws": "^8.18.0" },
+  "scripts": { "dev": "node index.js" }
+}
