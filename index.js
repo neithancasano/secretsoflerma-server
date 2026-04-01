@@ -52,16 +52,15 @@ wss.on("connection", (ws) => {
     fx: sx, fy: sy,
     path: [],
     dirty: true,
-    lastMoveAt: 0
+    lastMoveAt: 0,
+    welcomed: false  // wait for HELLO before sending SNAPSHOT
   };
 
   players.set(id, p);
 
+  // Send WELCOME immediately so client knows its id and map size
   send(ws, { t: "WELCOME", id, tick: TICK_HZ, map: { w: map.w, h: map.h } });
-  send(ws, { t: "SNAPSHOT", you: id, players: snapshotFor(p) });
-
-  // Mark everyone near as dirty so newcomers appear quickly
-  for (const other of players.values()) if (inAOI(p, other)) other.dirty = true;
+  // SNAPSHOT is sent after HELLO arrives with the real name
 
   ws.on("message", (buf) => {
     let msg;
@@ -70,6 +69,14 @@ wss.on("connection", (ws) => {
     if (msg.t === "HELLO") {
       p.name = String(msg.name || "Traveler").slice(0, 20);
       p.dirty = true;
+
+      // Now send the SNAPSHOT with the real name already set
+      if (!p.welcomed) {
+        p.welcomed = true;
+        send(ws, { t: "SNAPSHOT", you: id, players: snapshotFor(p) });
+        // Mark everyone near as dirty so newcomers appear quickly
+        for (const other of players.values()) if (inAOI(p, other)) other.dirty = true;
+      }
       return;
     }
 
@@ -146,7 +153,7 @@ setInterval(() => {
     }
   }
 
-  // broadcast deltas per player AOI — now includes name
+  // broadcast deltas per player AOI
   for (const p of players.values()) {
     const up = [];
     for (const other of players.values()) {
