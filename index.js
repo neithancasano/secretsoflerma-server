@@ -1,6 +1,11 @@
 import { WebSocketServer } from "ws";
 import { loadMap, isBlocked } from "./map.js";
 import { findPathAStar } from "./pathfinding.js";
+import {
+  defaultStats, deriveStats, statCost,
+  expToNextLevel, STAT_POINTS_PER_LEVEL, EXP_TABLE,
+  calcAtk, calcAspd, calcMaxHp, calcDef, calcCritRate
+} from "./stats.js";
 
 const TICK_HZ = 20;
 const TICK_MS = Math.floor(1000 / TICK_HZ);
@@ -11,14 +16,13 @@ const NPC_TILES_PER_SEC  = 2.5;
 const NPC_TILES_PER_TICK = NPC_TILES_PER_SEC / TICK_HZ;
 
 const AOI_RADIUS          = 18;
-const ATTACK_RANGE        = 1.5; // strict melee — ranged is a future class privilege
-const ATTACK_COOLDOWN     = 1000;
+const ATTACK_RANGE        = 1.5;
 const PORING_ATK_COOLDOWN = 2000;
 const PORING_ATK_DMG      = 5;
 const PORING_MAX_HP       = 50;
-const PORING_BASE_DMG     = 8;
 const PORING_RESPAWN_MS   = 10000;
 const LEASH_RANGE         = 12;
+const CRIT_MULTIPLIER     = 1.5; // crits do 1.5x damage
 
 const map = loadMap();
 let tick = 0;
@@ -42,7 +46,7 @@ function dist(a, b) {
 function snapshotFor(p) {
   const arr = [];
   for (const other of players.values())
-    if (inAOI(p, other)) arr.push({ id: other.id, x: other.x, y: other.y, name: other.name });
+    if (inAOI(p, other)) arr.push({ id: other.id, x: other.x, y: other.y, name: other.name, level: other.stats.level });
   return arr;
 }
 function npcSnapshotFor(p) {
@@ -103,6 +107,32 @@ setInterval(() => {
   }
 }, 1000);
 
+// ── Grant EXP and handle level up ──
+function grantExp(p, amount) {
+  p.stats.exp += amount;
+  let leveled = false;
+
+  while (p.stats.exp >= expToNextLevel(p.stats.level)) {
+    p.stats.exp -= expToNextLevel(p.stats.level);
+    p.stats.level++;
+    p.stats.statPoints += STAT_POINTS_PER_LEVEL;
+    leveled = true;
+
+    // Restore full HP on level up!
+    const newMaxHp = calcMaxHp(p.stats.level, p.stats.vit);
+    p.hp = newMaxHp;
+    p.maxHp = newMaxHp;
+
+    console.log(`[LERMA] ${p.name} reached level ${p.stats.level}!`);
+    broadcastNear(p, { t: "PLAYER_LEVEL_UP", playerId: p.id, name: p.name, level: p.stats.level });
+  }
+
+  // Send updated stats to the player
+  send(p.ws, { t: "STATS_UPDATE", stats: deriveStats(p.stats) });
+
+  return leveled;
+}
+
 // ── NPC AI tick ──
 function tickNPCs() {
   const now = Date.now();
@@ -127,9 +157,13 @@ function tickNPCs() {
         npc.path = [];
         if (now - npc.lastNpcAtkAt >= PORING_ATK_COOLDOWN) {
           npc.lastNpcAtkAt = now;
-          const dmg = PORING_ATK_DMG + Math.floor(Math.random() * 3);
-          send(target.ws, { t: "PLAYER_HIT", dmg, attackerId: npc.id });
-          console.log(`[LERMA] Poring hit ${target.name} for ${dmg}!`);
+          // Poring damage reduced by player DEF
+          const def = calcDef(target.stats.vit);
+          const rawDmg = PORING_ATK_DMG + Math.floor(Math.random() * 3);
+          const dmg = Math.max(1, rawDmg - def);
+          target.hp = Math.max(0, target.hp - dmg);
+          send(target.ws, { t: "PLAYER_HIT", dmg, hp: target.hp, maxHp: target.maxHp, attackerId: npc.id });
+          console.log(`[LERMA] Poring hit ${target.name} for ${dmg} (DEF ${def})!`);
         }
       } else {
         if (now - npc.lastChaseAt > 500 || npc.path.length === 0) {
@@ -179,6 +213,10 @@ wss.on("connection", (ws) => {
   let sx = 10, sy = 10;
   while (isBlocked(map, sx, sy)) sx++;
 
+  // Load default stats — client will send saved stats via HELLO
+  const baseStats = defaultStats();
+  const startMaxHp = calcMaxHp(baseStats.level, baseStats.vit);
+
   const p = {
     id, ws, name: "Traveler",
     x: sx, y: sy, fx: sx, fy: sy,
@@ -186,7 +224,11 @@ wss.on("connection", (ws) => {
     lastMoveAt: 0, lastAttackAt: 0,
     lastChaseNpcAt: 0,
     attackTarget: null,
-    welcomed: false
+    welcomed: false,
+    // Stats
+    stats: { ...baseStats },
+    hp: startMaxHp,
+    maxHp: startMaxHp,
   };
 
   players.set(id, p);
@@ -203,10 +245,31 @@ wss.on("connection", (ws) => {
       if (sx !== null && sy !== null && sx >= 0 && sy >= 0 && sx < map.w && sy < map.h && !isBlocked(map, sx, sy)) {
         p.x = sx; p.fx = sx; p.y = sy; p.fy = sy;
       }
+
+      // Restore saved stats from client (loaded from Firestore)
+      if (msg.stats && typeof msg.stats === "object") {
+        const s = msg.stats;
+        p.stats.level      = Math.max(1, Math.min(99, s.level      || 1));
+        p.stats.exp        = Math.max(0, s.exp        || 0);
+        p.stats.statPoints = Math.max(0, s.statPoints || 0);
+        p.stats.str        = Math.max(1, Math.min(99, s.str || 1));
+        p.stats.agi        = Math.max(1, Math.min(99, s.agi || 1));
+        p.stats.vit        = Math.max(1, Math.min(99, s.vit || 1));
+        p.stats.int        = Math.max(1, Math.min(99, s.int || 1));
+        p.stats.dex        = Math.max(1, Math.min(99, s.dex || 1));
+        p.stats.luk        = Math.max(1, Math.min(99, s.luk || 1));
+      }
+
+      // Recalculate HP from restored stats
+      p.maxHp = calcMaxHp(p.stats.level, p.stats.vit);
+      p.hp    = p.maxHp; // full HP on login
+
       p.dirty = true;
       if (!p.welcomed) {
         p.welcomed = true;
         send(ws, { t: "SNAPSHOT", you: id, players: snapshotFor(p), npcs: npcSnapshotFor(p) });
+        // Send stats immediately
+        send(ws, { t: "STATS_UPDATE", stats: deriveStats(p.stats), hp: p.hp, maxHp: p.maxHp });
         for (const other of players.values()) if (inAOI(p, other)) other.dirty = true;
       }
       return;
@@ -247,6 +310,37 @@ wss.on("connection", (ws) => {
       p.attackTarget = null;
       return;
     }
+
+    // ── Add stat point ──
+    if (msg.t === "ADD_STAT") {
+      const stat = msg.stat;
+      const valid = ["str","agi","vit","int","dex","luk"];
+      if (!valid.includes(stat)) return;
+      if (p.stats.statPoints < 1) return;
+      const cost = statCost(p.stats[stat]);
+      if (p.stats.statPoints < cost) {
+        send(p.ws, { t: "STAT_ERROR", msg: `Need ${cost} points to raise ${stat.toUpperCase()}` });
+        return;
+      }
+      p.stats.statPoints -= cost;
+      p.stats[stat]++;
+
+      // Recalculate HP if VIT changed
+      if (stat === "vit") {
+        const newMaxHp = calcMaxHp(p.stats.level, p.stats.vit);
+        p.hp = Math.min(p.hp + (newMaxHp - p.maxHp), newMaxHp);
+        p.maxHp = newMaxHp;
+      }
+
+      // Update attack cooldown if AGI changed
+      if (stat === "agi") {
+        p.attackCooldown = calcAspd(p.stats.agi);
+      }
+
+      send(p.ws, { t: "STATS_UPDATE", stats: deriveStats(p.stats), hp: p.hp, maxHp: p.maxHp });
+      console.log(`[LERMA] ${p.name} raised ${stat} to ${p.stats[stat]}`);
+      return;
+    }
   });
 
   ws.on("close", () => {
@@ -275,22 +369,34 @@ setInterval(() => {
         const path = findPathAStar(map, p.x, p.y, npc.x, npc.y, 300);
         if (path && path.length > 1) {
           p.path = path.filter(s => !(s.x === p.x && s.y === p.y));
-          console.log(`[LERMA] ${p.name} chasing Poring, dist=${d.toFixed(1)}`);
         }
       }
       continue;
     }
 
     p.path = [];
-    if (now - p.lastAttackAt < ATTACK_COOLDOWN) continue;
+    const attackCooldown = p.attackCooldown || calcAspd(p.stats.agi);
+    if (now - p.lastAttackAt < attackCooldown) continue;
     p.lastAttackAt = now;
 
-    const dmg = PORING_BASE_DMG + Math.floor(Math.random() * 5);
+    // Calculate damage using STR-based ATK
+    const baseAtk = calcAtk(p.stats.level, p.stats.str);
+    const variance = Math.floor(Math.random() * 5);
+    let dmg = baseAtk + variance;
+    let isCrit = false;
+
+    // Critical hit check from LUK
+    const critRate = calcCritRate(p.stats.luk);
+    if (Math.random() * 100 < critRate) {
+      dmg = Math.floor(dmg * CRIT_MULTIPLIER);
+      isCrit = true;
+    }
+
     npc.hp = Math.max(0, npc.hp - dmg);
     npc.dirty = true;
 
-    console.log(`[LERMA] ${p.name} hit Poring for ${dmg}! HP: ${npc.hp}/${npc.maxHp}`);
-    broadcastNear(npc, { t: "NPC_HIT", npcId: npc.id, dmg, hp: npc.hp, maxHp: npc.maxHp, attackerId: p.id });
+    console.log(`[LERMA] ${p.name} (Lv${p.stats.level}) hit Poring for ${dmg}${isCrit ? " CRIT!" : ""} HP: ${npc.hp}/${npc.maxHp}`);
+    broadcastNear(npc, { t: "NPC_HIT", npcId: npc.id, dmg, hp: npc.hp, maxHp: npc.maxHp, attackerId: p.id, isCrit });
 
     if (npc.hp <= 0) {
       npc.isDead = true;
@@ -300,6 +406,11 @@ setInterval(() => {
       p.attackTarget = null;
       broadcastNear(npc, { t: "NPC_DIED", npcId: npc.id, killerId: p.id });
       console.log(`[LERMA] Poring ${npc.id} slain by ${p.name}!`);
+
+      // Grant EXP!
+      const expGain = EXP_TABLE[npc.kind] || 15;
+      grantExp(p, expGain);
+      send(p.ws, { t: "EXP_GAIN", amount: expGain, total: p.stats.exp, next: expToNextLevel(p.stats.level) });
     }
   }
 }, 100);
@@ -330,7 +441,7 @@ setInterval(() => {
   for (const p of players.values()) {
     const up = [];
     for (const other of players.values())
-      if (inAOI(p, other) && other.dirty) up.push({ id: other.id, x: other.x, y: other.y, name: other.name });
+      if (inAOI(p, other) && other.dirty) up.push({ id: other.id, x: other.x, y: other.y, name: other.name, level: other.stats.level });
     const npcUp = [];
     for (const npc of npcs.values())
       if (!npc.isDead && inAOI(p, npc) && npc.dirty) npcUp.push({ id: npc.id, x: npc.x, y: npc.y, name: npc.name, kind: npc.kind, hp: npc.hp, maxHp: npc.maxHp });
