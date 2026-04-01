@@ -11,7 +11,7 @@ const NPC_TILES_PER_SEC  = 2.5;
 const NPC_TILES_PER_TICK = NPC_TILES_PER_SEC / TICK_HZ;
 
 const AOI_RADIUS          = 18;
-const ATTACK_RANGE        = 1.5; // strict melee — must be adjacent. Ranged = future class privilege 🏹
+const ATTACK_RANGE        = 1.5; // strict melee — ranged is a future class privilege
 const ATTACK_COOLDOWN     = 1000;
 const PORING_ATK_COOLDOWN = 2000;
 const PORING_ATK_DMG      = 5;
@@ -305,7 +305,8 @@ setInterval(() => {
 }, 100);
 
 setInterval(() => {
-  tick++;\n
+  tick++;
+
   for (const p of players.values()) {
     if (p.path.length === 0) continue;
     const next = p.path[0];
