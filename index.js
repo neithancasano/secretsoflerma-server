@@ -11,8 +11,7 @@ const NPC_TILES_PER_SEC  = 2.5;
 const NPC_TILES_PER_TICK = NPC_TILES_PER_SEC / TICK_HZ;
 
 const AOI_RADIUS          = 18;
-const ATTACK_RANGE        = 2;    // tiles — must be close to swing
-const CHASE_RANGE         = 2;    // player walks toward target if farther than this
+const ATTACK_RANGE        = 2;
 const ATTACK_COOLDOWN     = 1000;
 const PORING_ATK_COOLDOWN = 2000;
 const PORING_ATK_DMG      = 5;
@@ -84,7 +83,7 @@ function spawnPoring(spawnPos) {
 for (const spawn of PORING_SPAWNS) {
   if (!isBlocked(map, spawn.x, spawn.y)) spawnPoring(spawn);
 }
-console.log(`[LERMA] Spawned ${npcs.size} Porings 🛒`);
+console.log(`[LERMA] Spawned ${npcs.size} Porings`);
 
 // ── Respawn check ──
 setInterval(() => {
@@ -130,6 +129,7 @@ function tickNPCs() {
           npc.lastNpcAtkAt = now;
           const dmg = PORING_ATK_DMG + Math.floor(Math.random() * 3);
           send(target.ws, { t: "PLAYER_HIT", dmg, attackerId: npc.id });
+          console.log(`[LERMA] Poring hit ${target.name} for ${dmg}!`);
         }
       } else {
         if (now - npc.lastChaseAt > 500 || npc.path.length === 0) {
@@ -184,7 +184,8 @@ wss.on("connection", (ws) => {
     x: sx, y: sy, fx: sx, fy: sy,
     path: [], dirty: true,
     lastMoveAt: 0, lastAttackAt: 0,
-    attackTarget: null, lastChaseNpcAt: 0,
+    lastChaseNpcAt: 0,
+    attackTarget: null,
     welcomed: false
   };
 
@@ -217,7 +218,7 @@ wss.on("connection", (ws) => {
       const now = Date.now();
       if (now - p.lastMoveAt < 60) return;
       p.lastMoveAt = now;
-      p.attackTarget = null; // clicking map cancels attack
+      p.attackTarget = null;
       const tx = Math.floor(msg.x), ty = Math.floor(msg.y);
       if (tx < 0 || ty < 0 || tx >= map.w || ty >= map.h) return;
       if (isBlocked(map, tx, ty)) return;
@@ -232,6 +233,7 @@ wss.on("connection", (ws) => {
       if (!npc || npc.isDead) return;
       p.attackTarget = msg.npcId;
       p.path = [];
+      p.lastChaseNpcAt = 0; // reset so chase starts immediately
       if (!npc.aggroTarget) {
         npc.aggroTarget = p.id;
         npc.path = [];
@@ -257,7 +259,7 @@ wss.on("connection", (ws) => {
   });
 });
 
-// ── Auto attack tick — player chases NPC if out of range ──
+// ── Auto attack tick ──
 setInterval(() => {
   const now = Date.now();
   for (const p of players.values()) {
@@ -267,31 +269,30 @@ setInterval(() => {
 
     const d = dist(p, npc);
 
+    // Out of range — walk straight to the Poring's tile
     if (d > ATTACK_RANGE) {
-      // Out of range — walk toward the Poring every 400ms
-      if (now - p.lastChaseNpcAt > 400 || p.path.length === 0) {
+      if (now - p.lastChaseNpcAt > 400) {
         p.lastChaseNpcAt = now;
+        // Pathfind directly to npc tile — A* will get us adjacent
         const path = findPathAStar(map, p.x, p.y, npc.x, npc.y, 300);
         if (path && path.length > 1) {
-          // Walk to 1 tile away, not on top of it
-          const goal = path.length > 2 ? path[path.length - 2] : path[path.length - 1];
-          const chosePath = findPathAStar(map, p.x, p.y, goal.x, goal.y, 300);
-          if (chosePath && chosePath.length > 1)
-            p.path = chosePath.filter(s => !(s.x === p.x && s.y === p.y));
+          p.path = path.filter(s => !(s.x === p.x && s.y === p.y));
+          console.log(`[LERMA] ${p.name} chasing Poring, dist=${d.toFixed(1)}`);
         }
       }
-      continue; // don't attack yet, still moving
+      continue;
     }
 
-    // In range — attack!
+    // In range — ATTACK!
+    p.path = []; // plant feet and swing
     if (now - p.lastAttackAt < ATTACK_COOLDOWN) continue;
-    p.path = []; // stop moving while attacking
     p.lastAttackAt = now;
 
     const dmg = PORING_BASE_DMG + Math.floor(Math.random() * 5);
     npc.hp = Math.max(0, npc.hp - dmg);
     npc.dirty = true;
 
+    console.log(`[LERMA] ${p.name} hit Poring for ${dmg}! HP: ${npc.hp}/${npc.maxHp}`);
     broadcastNear(npc, { t: "NPC_HIT", npcId: npc.id, dmg, hp: npc.hp, maxHp: npc.maxHp, attackerId: p.id });
 
     if (npc.hp <= 0) {
