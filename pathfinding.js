@@ -1,11 +1,9 @@
-import { isBlocked } from "./map.js";
-
 function key(x, y) { return `${x},${y}`; }
 function h(ax, ay, bx, by) { return Math.abs(ax - bx) + Math.abs(ay - by); }
 
 export function findPathAStar(map, sx, sy, tx, ty, maxExpand = 600) {
   if (sx === tx && sy === ty) return [{ x: sx, y: sy }];
-  if (isBlocked(map, tx, ty)) return null;
+  if (map.isBlocked(tx, ty)) return null;
 
   const open = [{ x: sx, y: sy, g: 0, f: h(sx, sy, tx, ty) }];
   const came = new Map();
@@ -41,7 +39,7 @@ export function findPathAStar(map, sx, sy, tx, ty, maxExpand = 600) {
 
     for (const n of neigh) {
       if (n.x < 0 || n.y < 0 || n.x >= map.w || n.y >= map.h) continue;
-      if (isBlocked(map, n.x, n.y)) continue;
+      if (map.isBlocked(n.x, n.y)) continue;
 
       const nk = key(n.x, n.y);
       const tentative = cur.g + 1;
