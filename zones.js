@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════
-// Lerma Zone Definitions
+// Lerma Zone Definitions — 9 Naga Barangays
 // ══════════════════════════════════════════════
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
@@ -7,77 +7,110 @@ import { dirname, join } from 'path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-function loadZoneMap(filename) {
-  const raw = readFileSync(join(__dirname, 'zones', filename), 'utf8');
-  const data = JSON.parse(raw);
-  // Build blocked set
-  const blockedSet = new Set(data.blocked || []);
-  return {
-    w: data.w,
-    h: data.h,
-    tiles: data.tiles,
-    blocked: blockedSet,
-    isBlocked: (x, y) => blockedSet.has(`${x},${y}`),
-  };
-}
+// Zone layout (compass directions):
+// San Felipe ← Francia
+//               ↑
+//             Liboton ← Bagumbayan ← Plaza Rizal ← Panganiban ← Lerma → Diversion
+//                                                                             ↓
+//                                                                           Tabuco
 
-// Zone definitions
 export const ZONES = {
   lerma: {
     id: 'lerma',
     name: 'Barangay Lerma',
-    mapFile: 'map.json', // original map
-    // Portals: { tile coords, destZone, destX, destY, label }
+    mapFile: 'lerma.json',
     portals: [
-      { x: 15, y: 0,  destZone: 'lerma_norte',  destX: 15, destY: 38, label: 'Lerma Norte ↑' },
-      { x: 15, y: 39, destZone: 'lerma_sur',    destX: 15, destY: 1,  label: 'Lerma Sur ↓' },
-      { x: 0,  y: 20, destZone: 'punta_banka',  destX: 58, destY: 20, label: 'Punta Banka ←' },
-      { x: 59, y: 20, destZone: 'bagumbayan',   destX: 1,  destY: 20, label: 'Bagumbayan →' },
+      { x: 0,  y: 20, destZone: 'panganiban', destX: 58, destY: 20, label: 'Panganiban ←' },
+      { x: 59, y: 20, destZone: 'diversion',  destX: 1,  destY: 20, label: 'Diversion →'  },
     ],
-    // Migs NPC spawn
-    migs: { x: 16, y: 20 },
-    // Default player spawn
-    defaultSpawn: { x: 10, y: 10 },
+    migs: { x: 30, y: 20 },
+    defaultSpawn: { x: 15, y: 20 },
   },
-  lerma_norte: {
-    id: 'lerma_norte',
-    name: 'Lerma Norte',
-    mapFile: 'lerma_norte.json',
+  panganiban: {
+    id: 'panganiban',
+    name: 'Panganiban',
+    mapFile: 'panganiban.json',
     portals: [
-      { x: 15, y: 39, destZone: 'lerma', destX: 15, destY: 1, label: 'Barangay Lerma ↓' },
+      { x: 59, y: 20, destZone: 'lerma',       destX: 1,  destY: 20, label: 'Lerma →'         },
+      { x: 30, y: 39, destZone: 'plaza_rizal', destX: 30, destY: 1,  label: 'Plaza Rizal ↓'   },
     ],
-    migs: { x: 16, y: 20 },
-    defaultSpawn: { x: 15, y: 35 },
+    migs: null,
+    defaultSpawn: { x: 30, y: 15 },
   },
-  lerma_sur: {
-    id: 'lerma_sur',
-    name: 'Lerma Sur',
-    mapFile: 'lerma_sur.json',
+  plaza_rizal: {
+    id: 'plaza_rizal',
+    name: 'Plaza Rizal',
+    mapFile: 'plaza_rizal.json',
     portals: [
-      { x: 15, y: 0, destZone: 'lerma', destX: 15, destY: 38, label: 'Barangay Lerma ↑' },
+      { x: 30, y: 0,  destZone: 'panganiban', destX: 30, destY: 38, label: 'Panganiban ↑'  },
+      { x: 0,  y: 20, destZone: 'bagumbayan', destX: 58, destY: 20, label: 'Bagumbayan ←'  },
     ],
-    migs: { x: 16, y: 20 },
-    defaultSpawn: { x: 15, y: 5 },
+    migs: { x: 30, y: 20 },
+    defaultSpawn: { x: 30, y: 10 },
   },
-  punta_banka: {
-    id: 'punta_banka',
-    name: 'Punta Banka',
-    mapFile: 'punta_banka.json',
+  diversion: {
+    id: 'diversion',
+    name: 'Diversion Road',
+    mapFile: 'diversion.json',
     portals: [
-      { x: 59, y: 20, destZone: 'lerma', destX: 1, destY: 20, label: 'Barangay Lerma →' },
+      { x: 0,  y: 20, destZone: 'lerma',  destX: 58, destY: 20, label: 'Lerma ←'    },
+      { x: 30, y: 39, destZone: 'tabuco', destX: 30, destY: 1,  label: 'Tabuco ↓'   },
     ],
-    migs: { x: 31, y: 20 },
-    defaultSpawn: { x: 35, y: 20 },
+    migs: null,
+    defaultSpawn: { x: 30, y: 15 },
+  },
+  tabuco: {
+    id: 'tabuco',
+    name: 'Tabuco',
+    mapFile: 'tabuco.json',
+    portals: [
+      { x: 30, y: 0, destZone: 'diversion', destX: 30, destY: 38, label: 'Diversion ↑' },
+    ],
+    migs: { x: 30, y: 20 },
+    defaultSpawn: { x: 30, y: 10 },
   },
   bagumbayan: {
     id: 'bagumbayan',
     name: 'Bagumbayan',
     mapFile: 'bagumbayan.json',
     portals: [
-      { x: 0, y: 20, destZone: 'lerma', destX: 58, destY: 20, label: 'Barangay Lerma ←' },
+      { x: 59, y: 20, destZone: 'plaza_rizal', destX: 1,  destY: 20, label: 'Plaza Rizal →' },
+      { x: 0,  y: 20, destZone: 'liboton',     destX: 58, destY: 20, label: 'Liboton ←'     },
     ],
-    migs: { x: 16, y: 20 },
-    defaultSpawn: { x: 5, y: 20 },
+    migs: null,
+    defaultSpawn: { x: 30, y: 20 },
+  },
+  liboton: {
+    id: 'liboton',
+    name: 'Liboton',
+    mapFile: 'liboton.json',
+    portals: [
+      { x: 59, y: 20, destZone: 'bagumbayan', destX: 1,  destY: 20, label: 'Bagumbayan →' },
+      { x: 30, y: 0,  destZone: 'francia',    destX: 30, destY: 38, label: 'Francia ↑'    },
+    ],
+    migs: null,
+    defaultSpawn: { x: 30, y: 25 },
+  },
+  francia: {
+    id: 'francia',
+    name: 'Francia',
+    mapFile: 'francia.json',
+    portals: [
+      { x: 30, y: 39, destZone: 'liboton',   destX: 30, destY: 1,  label: 'Liboton ↓'    },
+      { x: 0,  y: 20, destZone: 'san_felipe', destX: 58, destY: 20, label: 'San Felipe ←' },
+    ],
+    migs: { x: 30, y: 20 },
+    defaultSpawn: { x: 35, y: 20 },
+  },
+  san_felipe: {
+    id: 'san_felipe',
+    name: 'San Felipe',
+    mapFile: 'san_felipe.json',
+    portals: [
+      { x: 59, y: 20, destZone: 'francia', destX: 1, destY: 20, label: 'Francia →' },
+    ],
+    migs: null,
+    defaultSpawn: { x: 30, y: 20 },
   },
 };
 
@@ -89,14 +122,7 @@ export function getZoneMap(zoneId) {
   const zone = ZONES[zoneId];
   if (!zone) throw new Error(`Unknown zone: ${zoneId}`);
 
-  // lerma uses the root map.json, others use zones/
-  let data;
-  if (zoneId === 'lerma') {
-    data = JSON.parse(readFileSync(join(__dirname, 'map.json'), 'utf8'));
-  } else {
-    data = JSON.parse(readFileSync(join(__dirname, 'zones', zone.mapFile), 'utf8'));
-  }
-
+  const data = JSON.parse(readFileSync(join(__dirname, 'zones', zone.mapFile), 'utf8'));
   const blockedSet = new Set(data.blocked || []);
   const map = {
     w: data.w,
@@ -108,7 +134,6 @@ export function getZoneMap(zoneId) {
   return map;
 }
 
-// Check if a tile is a portal and return portal def or null
 export function checkPortal(zoneId, x, y) {
   const zone = ZONES[zoneId];
   if (!zone) return null;

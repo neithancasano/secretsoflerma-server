@@ -22,15 +22,13 @@ const PORING_MAX_HP       = 50;
 const PORING_RESPAWN_MS   = 10000;
 const LEASH_RANGE         = 12;
 const CRIT_MULTIPLIER     = 1.5;
-const PORTAL_COOLDOWN_MS  = 2000; // prevent instant re-travel
+const PORTAL_COOLDOWN_MS  = 2000;
 
 let tick = 0;
 
-// players: id -> player (with zoneId)
 const players = new Map();
-// npcs per zone: zoneId -> Map(id -> npc)
 const zoneNpcs = {};
-const zoneRemovedPlayers = {}; // zoneId -> Set of removed player ids this tick
+const zoneRemovedPlayers = {};
 
 for (const zid of Object.keys(ZONES)) {
   zoneNpcs[zid] = new Map();
@@ -49,7 +47,6 @@ function dist(a,b) {
   return Math.sqrt(dx*dx+dy*dy);
 }
 
-// Get players in a zone
 function zonePlayers(zoneId) {
   const res = [];
   for (const p of players.values()) if (p.zoneId === zoneId) res.push(p);
@@ -62,26 +59,45 @@ function snapshotFor(p) {
     if (inAOI(p, other)) arr.push({ id:other.id, x:other.x, y:other.y, name:other.name, level:other.stats.level });
   return arr;
 }
+
+// FIX: Always include Migs NPCs regardless of AOI distance
 function npcSnapshotFor(p) {
   const arr = [];
   const npcs = zoneNpcs[p.zoneId] || new Map();
-  for (const npc of npcs.values())
-    if (!npc.isDead && inAOI(p, npc))
+  for (const npc of npcs.values()) {
+    if (npc.isDead) continue;
+    // Migs is always included in snapshot — he never moves so AOI would miss him
+    if (npc.isMigs || inAOI(p, npc))
       arr.push({ id:npc.id, x:npc.x, y:npc.y, name:npc.name, kind:npc.kind, hp:npc.hp, maxHp:npc.maxHp });
+  }
   return arr;
 }
+
 function broadcastNearInZone(zoneId, pos, obj) {
   for (const p of zonePlayers(zoneId))
     if (inAOI(p, pos)) send(p.ws, obj);
 }
 
+// FIX: Also broadcast Migs updates to everyone in the zone (he's always visible)
+function broadcastNpcInZone(zoneId, npc, obj) {
+  if (npc.isMigs) {
+    for (const p of zonePlayers(zoneId)) send(p.ws, obj);
+  } else {
+    broadcastNearInZone(zoneId, npc, obj);
+  }
+}
+
 // ── Spawn Porings per zone ──
 const PORING_SPAWNS_BY_ZONE = {
-  lerma:        [{ x:20,y:15 },{ x:25,y:18 },{ x:18,y:22 },{ x:30,y:25 },{ x:22,y:12 }],
-  lerma_norte:  [{ x:20,y:20 },{ x:25,y:15 },{ x:10,y:30 },{ x:35,y:28 }],
-  lerma_sur:    [{ x:25,y:25 },{ x:30,y:30 },{ x:10,y:35 },{ x:45,y:35 }],
-  punta_banka:  [{ x:30,y:10 },{ x:35,y:25 },{ x:45,y:30 }],
-  bagumbayan:   [{ x:25,y:25 },{ x:40,y:30 },{ x:20,y:30 },{ x:45,y:10 }],
+  lerma:       [{ x:20,y:15 },{ x:25,y:18 },{ x:18,y:22 },{ x:30,y:25 },{ x:22,y:12 }],
+  panganiban:  [{ x:20,y:20 },{ x:25,y:15 },{ x:10,y:30 },{ x:35,y:28 }],
+  plaza_rizal: [{ x:25,y:25 },{ x:30,y:30 },{ x:10,y:35 },{ x:45,y:35 }],
+  diversion:   [{ x:30,y:10 },{ x:35,y:25 },{ x:45,y:30 }],
+  tabuco:      [{ x:25,y:25 },{ x:40,y:30 },{ x:20,y:30 },{ x:45,y:10 }],
+  bagumbayan:  [{ x:20,y:20 },{ x:35,y:15 },{ x:45,y:28 }],
+  liboton:     [{ x:15,y:20 },{ x:40,y:25 },{ x:25,y:32 }],
+  francia:     [{ x:20,y:15 },{ x:35,y:22 },{ x:45,y:30 }],
+  san_felipe:  [{ x:30,y:15 },{ x:20,y:25 },{ x:45,y:20 }],
 };
 
 for (const [zoneId, spawns] of Object.entries(PORING_SPAWNS_BY_ZONE)) {
@@ -103,10 +119,10 @@ for (const [zoneId, spawns] of Object.entries(PORING_SPAWNS_BY_ZONE)) {
   console.log(`[LERMA] Zone ${zoneId}: spawned ${zoneNpcs[zoneId].size} Porings`);
 }
 
-// ── Migs NPC per zone ──
+// ── Migs NPC — only in zones that have migs defined ──
 function spawnMigs(zoneId) {
   const zone = ZONES[zoneId];
-  if (!zone || !zone.migs) return;
+  if (!zone || !zone.migs) return; // skip zones without Migs
   const map = getZoneMap(zoneId);
   const { x, y } = zone.migs;
   if (map.isBlocked(x, y)) return;
@@ -162,12 +178,10 @@ function teleportPlayer(p, destZoneId, destX, destY) {
   if (!destZone) return;
   const destMap = getZoneMap(destZoneId);
 
-  // Tell old zone players this player left
   for (const other of zonePlayers(p.zoneId)) {
     if (other.id !== p.id) send(other.ws, { t:'DELTA', tick, up:[], rm:[p.id], npcUp:[] });
   }
 
-  // Move player
   p.zoneId = destZoneId;
   p.x = destX; p.y = destY;
   p.fx = destX; p.fy = destY;
@@ -175,20 +189,17 @@ function teleportPlayer(p, destZoneId, destX, destY) {
   p.attackTarget = null;
   p.lastPortalAt = Date.now();
 
-  // Send new zone info to player
-  const newMap = destMap;
   send(p.ws, {
     t: 'ZONE_CHANGE',
     zoneId: destZoneId,
     zoneName: destZone.name,
-    map: { w: newMap.w, h: newMap.h },
+    map: { w: destMap.w, h: destMap.h },
     x: destX, y: destY,
     players: snapshotFor(p),
     npcs: npcSnapshotFor(p),
     portals: destZone.portals,
   });
 
-  // Tell new zone players this player appeared
   for (const other of zonePlayers(destZoneId)) {
     if (other.id !== p.id) {
       send(other.ws, { t:'DELTA', tick, up:[{ id:p.id, x:p.x, y:p.y, name:p.name, level:p.stats.level }], rm:[], npcUp:[] });
@@ -203,7 +214,6 @@ function tickZoneNPCs(zoneId) {
   const npcs = zoneNpcs[zoneId];
   const map  = getZoneMap(zoneId);
   const now  = Date.now();
-  const zone_players = zonePlayers(zoneId);
 
   for (const npc of npcs.values()) {
     if (npc.isDead || npc.isMigs) continue;
@@ -305,7 +315,6 @@ wss.on('connection', (ws) => {
       const sy=typeof msg.savedY==='number'?Math.floor(msg.savedY):null;
       const sz=msg.savedZone||'lerma';
 
-      // Restore zone
       if (ZONES[sz]) p.zoneId=sz;
       const map=getZoneMap(p.zoneId);
 
@@ -316,7 +325,6 @@ wss.on('connection', (ws) => {
         p.x=spawn.x; p.y=spawn.y; p.fx=spawn.x; p.fy=spawn.y;
       }
 
-      // Restore stats
       if (msg.stats&&typeof msg.stats==='object') {
         const s=msg.stats;
         p.stats.level=Math.max(1,Math.min(99,s.level||1));
@@ -326,7 +334,6 @@ wss.on('connection', (ws) => {
           p.stats[stat]=Math.max(1,Math.min(99,s[stat]||1));
       }
 
-      // Restore respawn point
       if (msg.respawnZone&&ZONES[msg.respawnZone]) {
         p.respawnZone=msg.respawnZone;
         p.respawnX=msg.respawnX||ZONES[msg.respawnZone].defaultSpawn.x;
@@ -379,15 +386,19 @@ wss.on('connection', (ws) => {
 
     if (msg.t==='CANCEL_ATTACK'){p.attackTarget=null;return;}
 
-    // ── Talk to Migs ──
     if (msg.t==='TALK_NPC') {
       const npcs=zoneNpcs[p.zoneId];
       if (!npcs)return;
       const npc=npcs.get(msg.npcId);
       if (!npc||!npc.isMigs)return;
-      if (dist(p,npc)>3)return; // must be close
+      if (dist(p,npc)>5)return;
 
       const zone=ZONES[p.zoneId];
+      // Build teleport destinations: all zones that have Migs (excluding current)
+      const migsZones = Object.values(ZONES)
+        .filter(z => z.migs && z.id !== p.zoneId)
+        .map(z => ({ zoneId: z.id, label: z.name }));
+
       send(p.ws,{
         t:'MIGS_MENU',
         npcId:npc.id,
@@ -398,12 +409,11 @@ wss.on('connection', (ws) => {
           { id:'storage', label:'📦 Access Storage (coming soon)' },
           { id:'close',   label:'👋 Salamat, Migs! Bye!' },
         ],
-        destinations: zone.portals.map(po => ({ zoneId:po.destZone, label:ZONES[po.destZone]?.name || po.destZone })),
+        destinations: migsZones,
       });
       return;
     }
 
-    // ── Migs action ──
     if (msg.t==='MIGS_ACTION') {
       if (msg.action==='save') {
         p.respawnZone=p.zoneId;
@@ -411,10 +421,9 @@ wss.on('connection', (ws) => {
         p.respawnY=p.y;
         send(p.ws,{t:'MIGS_RESPONSE',message:`Naka-save na! Kung mamatay ka, babalik ka dito sa ${ZONES[p.zoneId].name}. Ingat ha! 💾`});
         send(p.ws,{t:'RESPAWN_UPDATED',zone:p.zoneId,x:p.x,y:p.y});
-        console.log(`[LERMA] ${p.name} set respawn at ${p.zoneId} (${p.x},${p.y})`);
       } else if (msg.action==='teleport'&&msg.destZone) {
         const dest=ZONES[msg.destZone];
-        if (!dest){send(p.ws,{t:'MIGS_RESPONSE',message:'Hindi mahanap ang destinasyon...'});return;}
+        if (!dest||!dest.migs){send(p.ws,{t:'MIGS_RESPONSE',message:'Hindi mahanap ang destinasyon...'});return;}
         send(p.ws,{t:'MIGS_RESPONSE',message:`Sige, idi-deliver kita sa Migs ng ${dest.name}! Huwag mabigo! 🌀`});
         setTimeout(()=>teleportPlayer(p,msg.destZone,dest.migs.x+1,dest.migs.y),500);
       } else if (msg.action==='storage') {
@@ -492,7 +501,6 @@ setInterval(()=>{
 setInterval(()=>{
   tick++;
 
-  // Move players + check portals
   for (const p of players.values()) {
     if (p.path.length===0)continue;
     const next=p.path[0];
@@ -511,27 +519,27 @@ setInterval(()=>{
       p.fy=p.y;
     }
 
-    // Check portal
     if (p.dirty&&Date.now()-p.lastPortalAt>PORTAL_COOLDOWN_MS) {
       const portal=checkPortal(p.zoneId,p.x,p.y);
       if (portal) teleportPlayer(p,portal.destZone,portal.destX,portal.destY);
     }
   }
 
-  // Move NPCs per zone
   for (const zid of Object.keys(ZONES)) tickZoneNPCs(zid);
 
-  // Broadcast per zone
-  for (const [zoneId, zone_player_list] of Object.entries({})) {} // unused
   for (const p of players.values()) {
     const up=[];
     for (const other of zonePlayers(p.zoneId))
       if (inAOI(p,other)&&other.dirty) up.push({id:other.id,x:other.x,y:other.y,name:other.name,level:other.stats.level});
     const npcUp=[];
     const npcs=zoneNpcs[p.zoneId]||new Map();
-    for (const npc of npcs.values())
-      if (!npc.isDead&&inAOI(p,npc)&&npc.dirty) npcUp.push({id:npc.id,x:npc.x,y:npc.y,name:npc.name,kind:npc.kind,hp:npc.hp,maxHp:npc.maxHp});
-    const rm=[...( zoneRemovedPlayers[p.zoneId]||new Set())];
+    for (const npc of npcs.values()) {
+      if (npc.isDead) continue;
+      // FIX: Migs dirty updates go to everyone, not just AOI
+      if (npc.dirty && (npc.isMigs || inAOI(p,npc)))
+        npcUp.push({id:npc.id,x:npc.x,y:npc.y,name:npc.name,kind:npc.kind,hp:npc.hp,maxHp:npc.maxHp});
+    }
+    const rm=[...(zoneRemovedPlayers[p.zoneId]||new Set())];
     if (up.length||rm.length||npcUp.length) send(p.ws,{t:'DELTA',tick,up,rm,npcUp});
   }
 
