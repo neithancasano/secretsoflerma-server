@@ -1,5 +1,11 @@
 function key(x, y) { return `${x},${y}`; }
-function h(ax, ay, bx, by) { return Math.abs(ax - bx) + Math.abs(ay - by); }
+function h(ax, ay, bx, by) {
+  const dx = Math.abs(ax - bx);
+  const dy = Math.abs(ay - by);
+  const min = Math.min(dx, dy);
+  const max = Math.max(dx, dy);
+  return (Math.SQRT2 * min) + (max - min);
+}
 
 export function findPathAStar(map, sx, sy, tx, ty, maxExpand = 600) {
   if (sx === tx && sy === ty) return [{ x: sx, y: sy }];
@@ -31,18 +37,28 @@ export function findPathAStar(map, sx, sy, tx, ty, maxExpand = 600) {
     }
 
     const neigh = [
-      { x: cur.x + 1, y: cur.y },
-      { x: cur.x - 1, y: cur.y },
-      { x: cur.x, y: cur.y + 1 },
-      { x: cur.x, y: cur.y - 1 }
+      { x: cur.x + 1, y: cur.y, cost: 1 },
+      { x: cur.x - 1, y: cur.y, cost: 1 },
+      { x: cur.x, y: cur.y + 1, cost: 1 },
+      { x: cur.x, y: cur.y - 1, cost: 1 },
+      { x: cur.x + 1, y: cur.y + 1, cost: Math.SQRT2 },
+      { x: cur.x + 1, y: cur.y - 1, cost: Math.SQRT2 },
+      { x: cur.x - 1, y: cur.y + 1, cost: Math.SQRT2 },
+      { x: cur.x - 1, y: cur.y - 1, cost: Math.SQRT2 },
     ];
 
     for (const n of neigh) {
       if (n.x < 0 || n.y < 0 || n.x >= map.w || n.y >= map.h) continue;
       if (map.isBlocked(n.x, n.y)) continue;
+      const isDiagonal = n.x !== cur.x && n.y !== cur.y;
+      if (isDiagonal) {
+        const blockHorizontal = map.isBlocked(n.x, cur.y);
+        const blockVertical = map.isBlocked(cur.x, n.y);
+        if (blockHorizontal || blockVertical) continue;
+      }
 
       const nk = key(n.x, n.y);
-      const tentative = cur.g + 1;
+      const tentative = cur.g + n.cost;
       const best = gScore.get(nk);
 
       if (best === undefined || tentative < best) {
