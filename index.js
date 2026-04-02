@@ -46,6 +46,33 @@ function dist(a,b) {
   const dx=a.x-b.x, dy=a.y-b.y;
   return Math.sqrt(dx*dx+dy*dy);
 }
+function stepCost(a, b) {
+  return (a.x !== b.x && a.y !== b.y) ? Math.SQRT2 : 1;
+}
+function advanceAlongPath(entity, map, tilesPerTick) {
+  if (!entity.path || entity.path.length === 0) return;
+  entity.moveBudget = (entity.moveBudget || 0) + tilesPerTick;
+
+  while (entity.path.length > 0) {
+    const next = entity.path[0];
+    if (map.isBlocked(next.x, next.y)) {
+      entity.path = [];
+      entity.moveBudget = 0;
+      return;
+    }
+
+    const cost = stepCost(entity, next);
+    if (entity.moveBudget + 1e-9 < cost) return;
+
+    entity.x = next.x;
+    entity.y = next.y;
+    entity.fx = entity.x;
+    entity.fy = entity.y;
+    entity.dirty = true;
+    entity.path.shift();
+    entity.moveBudget -= cost;
+  }
+}
 
 function zonePlayers(zoneId) {
   const res = [];
@@ -257,21 +284,7 @@ function tickZoneNPCs(zoneId) {
       }
     }
 
-    if (npc.path.length===0) continue;
-    const next=npc.path[0];
-    if (npc.x===next.x&&npc.y===next.y){npc.path.shift();continue;}
-    const dx=Math.sign(next.x-npc.x), dy=Math.sign(next.y-npc.y);
-    npc.fx+=dx*NPC_TILES_PER_TICK; npc.fy+=dy*NPC_TILES_PER_TICK;
-    if (Math.abs(npc.fx-npc.x)>=1) {
-      const nx=npc.x+dx;
-      if (!map.isBlocked(nx,npc.y)){npc.x=nx;npc.dirty=true;}else npc.path=[];
-      npc.fx=npc.x;
-    }
-    if (Math.abs(npc.fy-npc.y)>=1) {
-      const ny=npc.y+dy;
-      if (!map.isBlocked(npc.x,ny)){npc.y=ny;npc.dirty=true;}else npc.path=[];
-      npc.fy=npc.y;
-    }
+    advanceAlongPath(npc, map, NPC_TILES_PER_TICK);
   }
 }
 
@@ -291,6 +304,7 @@ wss.on('connection', (ws) => {
     zoneId:'lerma',
     x:defaultZone.defaultSpawn.x, y:defaultZone.defaultSpawn.y,
     fx:defaultZone.defaultSpawn.x, fy:defaultZone.defaultSpawn.y,
+    moveBudget:0,
     path:[], dirty:true,
     lastMoveAt:0, lastAttackAt:0, lastChaseNpcAt:0,
     attackTarget:null, welcomed:false,
@@ -380,7 +394,9 @@ wss.on('connection', (ws) => {
       p.attackTarget=msg.npcId;
       p.path=[];
       p.lastChaseNpcAt=0;
-      if (!npc.aggroTarget){npc.aggroTarget=p.id;npc.path=[];broadcastNearInZone(p.zoneId,npc,{t:'NPC_AGGRO',npcId:npc.id});}
+      npc.aggroTarget=p.id;
+      npc.path=[];
+      broadcastNearInZone(p.zoneId,npc,{t:'NPC_AGGRO',npcId:npc.id});
       return;
     }
 
@@ -502,22 +518,8 @@ setInterval(()=>{
   tick++;
 
   for (const p of players.values()) {
-    if (p.path.length===0)continue;
-    const next=p.path[0];
-    if (p.x===next.x&&p.y===next.y){p.path.shift();continue;}
-    const dx=Math.sign(next.x-p.x),dy=Math.sign(next.y-p.y);
-    p.fx+=dx*TILES_PER_TICK; p.fy+=dy*TILES_PER_TICK;
     const map=getZoneMap(p.zoneId);
-    if (Math.abs(p.fx-p.x)>=1){
-      const nx=p.x+dx;
-      if (!map.isBlocked(nx,p.y)){p.x=nx;p.dirty=true;}else p.path=[];
-      p.fx=p.x;
-    }
-    if (Math.abs(p.fy-p.y)>=1){
-      const ny=p.y+dy;
-      if (!map.isBlocked(p.x,ny)){p.y=ny;p.dirty=true;}else p.path=[];
-      p.fy=p.y;
-    }
+    advanceAlongPath(p, map, TILES_PER_TICK);
 
     if (p.dirty&&Date.now()-p.lastPortalAt>PORTAL_COOLDOWN_MS) {
       const portal=checkPortal(p.zoneId,p.x,p.y);
